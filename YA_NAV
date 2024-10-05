@@ -1,0 +1,258 @@
+import SwiftUI
+import MapKit
+import CoreLocation
+import Firebase
+import FirebaseFirestore
+
+struct AeroportInfo: Identifiable {
+    let id = UUID()
+    let nume: String
+    let coordonate: CLLocationCoordinate2D
+    let detalii: String
+    let tipAeroport: TipAeroport
+}
+
+enum TipAeroport {
+    case civil
+    case militar
+}
+
+struct Aeronava: Identifiable {
+    let id: String
+    let coordonate: CLLocationCoordinate2D
+    let viteza: Double
+    let altitudine: Double
+    let heading: Double
+}
+
+struct ContentView: View {
+    @State private var region = MKCoordinateRegion(center: CLLocationCoordinate2D(latitude: 45.9432, longitude: 24.9668), span: MKCoordinateSpan(latitudeDelta: 5, longitudeDelta: 5))
+    @State private var aeroporturi: [AeroportInfo] = []
+    @State private var vitezaLaSol: Double = 0
+    @State private var altitudine: Double = 0
+    @State private var heading: Double = 0
+    @State private var estimareUrmatorPunct: String = ""
+    @State private var traiect: [CLLocationCoordinate2D] = []
+    @State private var timpCurent = Date()
+    @State private var alteAeronave: [Aeronava] = []
+    @State private var esteAutentificat = false
+    @State private var email = ""
+    @State private var parola = ""
+    
+    let locationManager = CLLocationManager()
+    let timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
+    let db = Firestore.firestore()
+    
+    var body: some View {
+        Group {
+            if esteAutentificat {
+                ZStack {
+                    Map(coordinateRegion: $region, showsUserLocation: true, annotationItems: aeroporturi + alteAeronave) { item in
+                        MapAnnotation(coordinate: item.coordonate) {
+                            if let aeroport = item as? AeroportInfo {
+                                Image(systemName: aeroport.tipAeroport == .civil ? "airplane" : "airplane.circle")
+                                    .foregroundColor(aeroport.tipAeroport == .civil ? .blue : .red)
+                                    .onTapGesture {
+                                        print(aeroport.detalii)
+                                    }
+                            } else if let aeronava = item as? Aeronava {
+                                Image(systemName: "airplane")
+                                    .foregroundColor(.green)
+                                    .rotationEffect(Angle(degrees: aeronava.heading))
+                            }
+                        }
+                    }
+                    .overlay(
+                        MapPolyline(coordinates: traiect)
+                            .stroke(Color.blue, lineWidth: 3)
+                    )
+                    .edgesIgnoringSafeArea(.all)
+                    
+                    VStack {
+                        Text("Timp curent: \(timpFormatat)")
+                            .padding()
+                            .background(Color.black.opacity(0.7))
+                            .foregroundColor(.white)
+                            .cornerRadius(10)
+                        
+                        Spacer()
+                        
+                        HStack {
+                            InfoView(title: "Viteza", value: String(format: "%.1f km/h", vitezaLaSol))
+                            InfoView(title: "Altitudine", value: String(format: "%.0f m", altitudine))
+                            InfoView(title: "Heading", value: String(format: "%.0f°", heading))
+                        }
+                        
+                        Text("Estimare următorul punct: \(estimareUrmatorPunct)")
+                            .padding()
+                            .background(Color.black.opacity(0.7))
+                            .foregroundColor(.white)
+                            .cornerRadius(10)
+                    }
+                }
+                .onAppear {
+                    setupLocationManager()
+                    incarcaAeroporturi()
+                    observaAlteAeronave()
+                }
+                .onReceive(timer) { _ in
+                    timpCurent = Date()
+                    actualizeazaPozitia()
+                }
+            } else {
+                VStack {
+                    TextField("Email", text: $email)
+                        .textFieldStyle(RoundedBorderTextFieldStyle())
+                        .padding()
+                    SecureField("Parola", text: $parola)
+                        .textFieldStyle(RoundedBorderTextFieldStyle())
+                        .padding()
+                    Button("Autentificare") {
+                        autentificare()
+                    }
+                    .padding()
+                }
+            }
+        }
+    }
+    
+    var timpFormatat: String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm:ss"
+        return formatter.string(from: timpCurent)
+    }
+    
+    func setupLocationManager() {
+        locationManager.delegate = self
+        locationManager.requestWhenInUseAuthorization()
+        locationManager.startUpdatingLocation()
+        locationManager.startUpdatingHeading()
+    }
+    
+    func incarcaAeroporturi() {
+        // Aici ar trebui să încarci datele reale despre aeroporturi și aerodromuri din România, inclusiv cele militare
+        aeroporturi = [
+            AeroportInfo(nume: "Henri Coandă", coordonate: CLLocationCoordinate2D(latitude: 44.5711, longitude: 26.0858), detalii: "Aeroportul Internațional Henri Coandă", tipAeroport: .civil),
+            AeroportInfo(nume: "Cluj-Napoca", coordonate: CLLocationCoordinate2D(latitude: 46.7852, longitude: 23.6862), detalii: "Aeroportul Internațional Avram Iancu Cluj", tipAeroport: .civil),
+            AeroportInfo(nume: "Baza 71 Aeriană Câmpia Turzii", coordonate: CLLocationCoordinate2D(latitude: 46.5022, longitude: 23.8856), detalii: "Bază aeriană militară", tipAeroport: .militar),
+            AeroportInfo(nume: "Baza 86 Aeriană Fetești", coordonate: CLLocationCoordinate2D(latitude: 44.4167, longitude: 27.8500), detalii: "Bază aeriană militară", tipAeroport: .militar)
+        ]
+    }
+    
+    func actualizeazaTraiect(cuLocatia locatie: CLLocationCoordinate2D) {
+        traiect.append(locatie)
+        if traiect.count > 100 {
+            traiect.removeFirst()
+        }
+    }
+    
+    func autentificare() {
+        Auth.auth().signIn(withEmail: email, password: parola) { result, error in
+            if let error = error {
+                print("Eroare la autentificare: \(error.localizedDescription)")
+            } else {
+                esteAutentificat = true
+            }
+        }
+    }
+    
+    func actualizeazaPozitia() {
+        guard let locatie = locationManager.location else { return }
+        let pozitie = ["latitudine": locatie.coordinate.latitude,
+                       "longitudine": locatie.coordinate.longitude,
+                       "viteza": vitezaLaSol,
+                       "altitudine": altitudine,
+                       "heading": heading]
+        
+        db.collection("aeronave").document(Auth.auth().currentUser?.uid ?? "").setData(pozitie) { error in
+            if let error = error {
+                print("Eroare la actualizarea poziției: \(error.localizedDescription)")
+            }
+        }
+    }
+    
+    func observaAlteAeronave() {
+        db.collection("aeronave").addSnapshotListener { querySnapshot, error in
+            guard let documents = querySnapshot?.documents else {
+                print("Eroare la obținerea documentelor: \(error?.localizedDescription ?? "Eroare necunoscută")")
+                return
+            }
+            
+            alteAeronave = documents.compactMap { document -> Aeronava? in
+                guard let latitudine = document.data()["latitudine"] as? Double,
+                      let longitudine = document.data()["longitudine"] as? Double,
+                      let viteza = document.data()["viteza"] as? Double,
+                      let altitudine = document.data()["altitudine"] as? Double,
+                      let heading = document.data()["heading"] as? Double,
+                      document.documentID != Auth.auth().currentUser?.uid else {
+                    return nil
+                }
+                
+                return Aeronava(id: document.documentID,
+                                coordonate: CLLocationCoordinate2D(latitude: latitudine, longitude: longitudine),
+                                viteza: viteza,
+                                altitudine: altitudine,
+                                heading: heading)
+            }
+        }
+    }
+}
+
+struct InfoView: View {
+    let title: String
+    let value: String
+    
+    var body: some View {
+        VStack {
+            Text(title)
+                .font(.caption)
+            Text(value)
+                .font(.headline)
+        }
+        .padding()
+        .background(Color.black.opacity(0.7))
+        .foregroundColor(.white)
+        .cornerRadius(10)
+    }
+}
+
+extension ContentView: CLLocationManagerDelegate {
+    func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
+        guard let location = locations.last else { return }
+        vitezaLaSol = location.speed * 3.6 // convertire la km/h
+        altitudine = location.altitude
+        
+        // Actualizează regiunea hărții pentru a urmări locația utilizatorului
+        region.center = location.coordinate
+        
+        // Actualizează traiectul
+        actualizeazaTraiect(cuLocatia: location.coordinate)
+        
+        // Calculează estimarea pentru următorul punct
+        if let ultimaLocatie = traiect.dropLast().last {
+            let distanta = location.distance(from: CLLocation(latitude: ultimaLocatie.latitude, longitude: ultimaLocatie.longitude))
+            let timp = distanta / location.speed
+            estimareUrmatorPunct = String(format: "%.1f secunde", timp)
+        }
+    }
+    
+    func locationManager(_ manager: CLLocationManager, didUpdateHeading newHeading: CLHeading) {
+        heading = newHeading.trueHeading
+    }
+}
+
+@main
+struct SkyDaemonRomaniaApp: App {
+    init() {
+        FirebaseApp.configure()
+    }
+    
+    var body: some Scene {
+        WindowGroup {
+            ContentView()
+        }
+    }
+}
+
+
+

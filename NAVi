@@ -1,0 +1,51 @@
+import React from 'react';
+import { View, Text, StyleSheet } from 'react-native';
+import MapView, { PROVIDER_GOOGLE } from 'react-native-maps';
+import Geolocation from '@react-native-community/geolocation';
+
+const AplicatieNavigatieAeriana = () => {
+  const [pozitie, setPozitie] = React.useState(null);
+
+  React.useEffect(() => {
+    Geolocation.getCurrentPosition(
+      (pozitie) => {
+        setPozitie({
+          latitude: pozitie.coords.latitude,
+          longitude: pozitie.coords.longitude,
+          latitudeDelta: 0.0922,
+          longitudeDelta: 0.0421,
+        });
+      },
+      (eroare) => console.log('Eroare:', eroare),
+      { enableHighAccuracy: true, timeout: 20000, maximumAge: 1000 }
+    );
+  }, []);
+
+  return (
+    <View style={styles.container}>
+      {pozitie ? (
+        <MapView
+          provider={PROVIDER_GOOGLE}
+          style={styles.harta}
+          initialRegion={pozitie}
+        >
+          {/* Aici puteți adăuga markeri pentru aeroporturi și alte puncte de interes */}
+        </MapView>
+      ) : (
+        <Text>Se încarcă harta...</Text>
+      )}
+    </View>
+  );
+};
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+  },
+  harta: {
+    width: '100%',
+    height: '100%',
+  },
+});
+
+export default AplicatieNavigatieAeriana;
